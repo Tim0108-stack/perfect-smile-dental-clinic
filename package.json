@@ -1,0 +1,26 @@
+{
+  "name": "perfect-smile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Perfect Smile Clinic Workspace — internal clinic management application (foundation).",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n CLIENT,SERVER -c teal,slate \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:client": "npm run dev -w client",
+    "dev:server": "npm run dev -w server",
+    "build": "npm run build -w server && npm run build -w client",
+    "build:client": "npm run build -w client",
+    "build:server": "npm run build -w server",
+    "typecheck": "npm run typecheck -w client && npm run typecheck -w server",
+    "lint": "npm run lint -w client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  }
+}

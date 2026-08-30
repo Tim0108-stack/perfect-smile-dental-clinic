@@ -1,0 +1,166 @@
+import type {
+  Appointment,
+  AppointmentStatus,
+  ReportAppointment,
+} from "@shared/types/index";
+
+import { supabase } from "@/lib/supabaseClient";
+
+export interface AppointmentPayload {
+  patient_name: string;
+  phone_number: string;
+  appointment_date: string;
+  assigned_slot: string;
+  notes: string | null;
+  booking_source: Appointment["booking_source"];
+  status?: AppointmentStatus;
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  /*
+   * Always retrieve the current Supabase session before making
+   * an authenticated API request.
+   *
+   * getSession() returns the locally stored session. If Supabase
+   * has an expired access token, refreshSession() gives us a
+   * current token before sending the request.
+   */
+  let { data, error } = await supabase.auth.getSession();
+
+  if (error) {
+    throw new Error(
+      error.message || "Unable to retrieve authentication session",
+    );
+  }
+
+  let session = data.session;
+
+  if (!session) {
+    throw new Error(
+      "Your session has expired. Please sign in again.",
+    );
+  }
+
+  /*
+   * Refresh the session when necessary.
+   * Supabase handles whether the refresh is actually required.
+   */
+  const refreshed = await supabase.auth.refreshSession();
+
+  if (!refreshed.error && refreshed.data.session) {
+    session = refreshed.data.session;
+  }
+
+  const token = session.access_token;
+
+  const headers = new Headers(options.headers);
+
+  headers.set("Content-Type", "application/json");
+  headers.set("Authorization", `Bearer ${token}`);
+
+  const response = await fetch(`/api${path}`, {
+    ...options,
+    headers,
+  });
+
+  if (!response.ok) {
+    const body = (await response
+      .json()
+      .catch(() => null)) as
+      | {
+          error?: {
+            message?: string;
+          };
+        }
+      | null;
+
+    if (response.status === 401) {
+      throw new Error(
+        body?.error?.message ||
+          "Your session is no longer valid. Please sign in again.",
+      );
+    }
+
+    throw new Error(
+      body?.error?.message ||
+        `Appointment request failed (${response.status})`,
+    );
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return (await response.json()) as T;
+}
+
+export const appointmentApi = {
+  list: () =>
+    request<Appointment[]>("/appointments"),
+
+  get: (id: Appointment["id"]) =>
+    request<Appointment>(`/appointments/${id}`),
+
+  create: (payload: AppointmentPayload) =>
+    request<Appointment>("/appointments", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  update: (
+    id: Appointment["id"],
+    payload: AppointmentPayload,
+  ) =>
+    request<Appointment>(`/appointments/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  remove: (id: Appointment["id"]) =>
+    request<void>(`/appointments/${id}`, {
+      method: "DELETE",
+    }),
+
+  updateStatus: (
+    id: Appointment["id"],
+    status: AppointmentStatus,
+  ) =>
+    request<Appointment>(
+      `/appointments/${id}/status`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      },
+    ),
+
+  tomorrowReminders: () =>
+    request<{
+      pending: Appointment[];
+      sent: Appointment[];
+    }>("/appointments/reminders/tomorrow"),
+
+  markReminder: (id: Appointment["id"]) =>
+    request<Appointment>(
+      `/appointments/${id}/reminder`,
+      {
+        method: "PATCH",
+      },
+    ),
+
+  report: (start?: string, end?: string) => {
+    const query =
+      start || end
+        ? `?${new URLSearchParams({
+            ...(start ? { start } : {}),
+            ...(end ? { end } : {}),
+          })}`
+        : "";
+
+    return request<ReportAppointment[]>(
+      `/reports${query}`,
+    );
+  },
+};

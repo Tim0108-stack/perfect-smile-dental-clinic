@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --brand: #0f766e;
+  --brand-dark: #115e59;
+  --ink: #18181b;
+  --sidebar-w: 17rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Inter", sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.011em;
+  background: #fafafa;
+}
+
+.font-display {
+  font-family: "Inter Tight", sans-serif;
+  letter-spacing: -0.02em;
+}
+
+/* Flat, minimal cards — no glassmorphism / blur, matching the legacy app. */
+.app-card {
+  background: #ffffff;
+  border: 1px solid #ececee;
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.04);
+}
+
+.dashboard-hero {
+  background: linear-gradient(135deg, #ffffff 0%, #f0fdfa 100%);
+  border: 1px solid #d9eeea;
+}
+
+.field-control {
+  min-height: 42px;
+  background: #fff;
+  border-color: #e4e4e7;
+}
+.field-control:hover {
+  border-color: #c4c4c9;
+}
+.field-control:focus {
+  border-color: #14b8a6;
+  box-shadow: 0 0 0 3.5px rgba(20, 184, 166, 0.13);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+}
+
+/* Accessible focus states for keyboard users. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid #14b8a6;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.fade-in {
+  animation: fadeIn 0.35s ease-out;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Sidebar navigation ── */
+.sidenav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #52525b;
+  border: 1px solid transparent;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+  width: 100%;
+  text-align: left;
+}
+.sidenav-item:hover {
+  background: #f4f4f5;
+  color: #18181b;
+}
+.sidenav-item.active {
+  background: #f0fdfa;
+  color: #0f766e;
+  font-weight: 700;
+}
+.sidenav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 999px 999px 0;
+  background: #0f766e;
+}
+.sidenav-item svg {
+  flex-shrink: 0;
+}
+
+.attention-card {
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+.attention-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(24, 24, 27, 0.07);
+}
+
+/* ── Login Page Styles ── */
+
+.login-hero-gradient {
+  background: linear-gradient(135deg, #ffffff 0%, #f0fdfa 50%, #ecf8f6 100%);
+  border: 1px solid #d9eeea;
+  box-shadow: 0 4px 12px rgba(24, 24, 27, 0.08), 0 1px 2px rgba(24, 24, 27, 0.04);
+}
+
+.login-info-card {
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(217, 238, 234, 0.6);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 8px rgba(24, 24, 27, 0.04);
+  transition:
+    transform 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 280ms ease,
+    border-color 280ms ease;
+}
+
+.login-info-card:hover {
+  border-color: rgba(20, 184, 166, 0.4);
+  box-shadow: 0 8px 24px rgba(20, 184, 166, 0.12);
+}
+
+.pulse-soft {
+  animation: pulseSoft 3s ease-in-out infinite;
+}
+
+@keyframes pulseSoft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Respect user's motion preferences for animations */
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .pulse-soft,
+  .login-info-card,
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
