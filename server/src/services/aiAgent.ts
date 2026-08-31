@@ -265,7 +265,7 @@ export class ClinicAiAgent {
       {
         name: "get_appointment_summary",
         description:
-          "Get appointment statistics for a specific date range. Can optionally filter by appointment or treatment type.",
+          "Get appointment statistics for a specific date range, broken down by status and by real treatment (from the clinic's treatment catalog). Optionally filter to a single treatment.",
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -277,10 +277,10 @@ export class ClinicAiAgent {
               type: Type.STRING,
               description: "End date in YYYY-MM-DD format.",
             },
-            appointment_type: {
+            treatment: {
               type: Type.STRING,
               description:
-                "Optional appointment or treatment type, such as Consultation.",
+                "Optional treatment name to filter by, matched against the clinic's real treatment catalog (e.g. \"Root Canal Treatment\", \"Invisalign\", \"Dental Cleaning\"). Leave empty to include all treatments and get a full by-treatment breakdown.",
             },
           },
           required: ["start_date", "end_date"],
@@ -390,10 +390,10 @@ export class ClinicAiAgent {
             end_date: endDate,
           };
 
-          const appointmentType = this.getString(args.appointment_type);
+          const treatment = this.getString(args.treatment);
 
-          if (appointmentType) {
-            params.appointment_type = appointmentType;
+          if (treatment) {
+            params.treatment = treatment;
           }
 
           return await this.tools.getAppointmentSummary(params);

@@ -17,6 +17,18 @@ import type {
 } from "./aiTypes.js";
 import type { Appointment } from "@shared/types/index";
 
+/** Every column plus the treatment name, resolved via the real FK relationship. */
+const APPOINTMENT_SELECT = "*, treatment:treatments(name)";
+
+type AppointmentRow = Omit<Appointment, "treatment_name"> & {
+  treatment: { name: string } | null;
+};
+
+function toAppointment(row: AppointmentRow): Appointment {
+  const { treatment, ...rest } = row;
+  return { ...rest, treatment_name: treatment?.name ?? null };
+}
+
 export class AiTools {
   private supabase;
 
@@ -33,13 +45,13 @@ export class AiTools {
 
     const { data, error } = await this.supabase
       .from("appointments")
-      .select("*")
+      .select(APPOINTMENT_SELECT)
       .eq("appointment_date", today)
       .order("assigned_slot", { ascending: true })
       .limit(limit);
 
     if (error) throw new Error(`Failed to get today's appointments: ${error.message}`);
-    return data ?? [];
+    return ((data ?? []) as unknown as AppointmentRow[]).map(toAppointment);
   }
 
   /**
@@ -51,13 +63,13 @@ export class AiTools {
 
     const { data, error } = await this.supabase
       .from("appointments")
-      .select("*")
+      .select(APPOINTMENT_SELECT)
       .eq("appointment_date", tomorrow)
       .order("assigned_slot", { ascending: true })
       .limit(limit);
 
     if (error) throw new Error(`Failed to get tomorrow's appointments: ${error.message}`);
-    return data ?? [];
+    return ((data ?? []) as unknown as AppointmentRow[]).map(toAppointment);
   }
 
   /**
@@ -71,7 +83,7 @@ export class AiTools {
 
     const { data, error } = await this.supabase
       .from("appointments")
-      .select("*")
+      .select(APPOINTMENT_SELECT)
       .gte("appointment_date", today)
       .lte("appointment_date", endDate)
       .in("status", ["Scheduled", "Checked in", "In treatment"])
@@ -80,37 +92,80 @@ export class AiTools {
       .limit(limit);
 
     if (error) throw new Error(`Failed to get upcoming appointments: ${error.message}`);
-    return data ?? [];
+    return ((data ?? []) as unknown as AppointmentRow[]).map(toAppointment);
   }
 
   /**
-   * Get appointment summary statistics
+   * Get appointment summary statistics, broken down by status and by real
+   * treatment. When `treatment` is supplied, it is resolved against the
+   * actual treatments table (case-insensitive substring match) and the
+   * summary is scoped to appointments with that treatment_id. A name that
+   * matches zero or more than one treatment is reported as an error rather
+   * than guessed.
    */
   async getAppointmentSummary(params: GetAppointmentSummaryParams): Promise<AppointmentSummary> {
-    const { start_date, end_date } = params;
+    const { start_date, end_date, treatment } = params;
 
-    const { data, error } = await this.supabase
+    let matchedTreatmentId: number | string | undefined;
+    let matchedTreatmentName: string | undefined;
+
+    if (treatment) {
+      const { data: matches, error: treatmentError } = await this.supabase
+        .from("treatments")
+        .select("id, name")
+        .ilike("name", `%${treatment}%`);
+
+      if (treatmentError) throw new Error(`Failed to look up treatment: ${treatmentError.message}`);
+
+      if (!matches || matches.length === 0) {
+        throw new Error(`No treatment named "${treatment}" was found in the clinic's treatment catalog.`);
+      }
+
+      if (matches.length > 1) {
+        const names = matches.map((match) => match.name).join(", ");
+        throw new Error(`"${treatment}" matches more than one treatment (${names}). Please specify one exactly.`);
+      }
+
+      matchedTreatmentId = matches[0].id;
+      matchedTreatmentName = matches[0].name;
+    }
+
+    let query = this.supabase
       .from("appointments")
-      .select("status")
+      .select("status, treatment:treatments(name)")
       .gte("appointment_date", start_date)
       .lte("appointment_date", end_date);
 
+    if (matchedTreatmentId !== undefined) {
+      query = query.eq("treatment_id", matchedTreatmentId);
+    }
+
+    const { data, error } = await query;
+
     if (error) throw new Error(`Failed to get appointment summary: ${error.message}`);
 
-    const appointments = data ?? [];
+    const appointments = (data ?? []) as unknown as Array<{ status: string; treatment: { name: string } | null }>;
+
     const summary: AppointmentSummary = {
       total: appointments.length,
       by_status: {},
+      by_treatment: {},
     };
 
     for (const apt of appointments) {
       summary.by_status[apt.status] = (summary.by_status[apt.status] ?? 0) + 1;
+
+      const treatmentName = apt.treatment?.name ?? "Not specified";
+      summary.by_treatment![treatmentName] = (summary.by_treatment![treatmentName] ?? 0) + 1;
     }
 
     // Calculate derived metrics
-    summary.consultations = summary.by_status["Scheduled"] ?? 0;
     summary.cancellations = (summary.by_status["Cancelled"] ?? 0);
     summary.no_shows = (summary.by_status["No-show"] ?? 0);
+
+    if (matchedTreatmentName) {
+      summary.matched_treatment = matchedTreatmentName;
+    }
 
     return summary;
   }
@@ -185,13 +240,13 @@ export class AiTools {
 
     const { data, error } = await this.supabase
       .from("appointments")
-      .select("*")
+      .select(APPOINTMENT_SELECT)
       .eq("patient_name", patient_name)
       .order("appointment_date", { ascending: false })
       .limit(limit);
 
     if (error) throw new Error(`Failed to get patient appointments: ${error.message}`);
-    return data ?? [];
+    return ((data ?? []) as unknown as AppointmentRow[]).map(toAppointment);
   }
 
   /**
@@ -203,7 +258,7 @@ export class AiTools {
 
     const { data, error } = await this.supabase
       .from("appointments")
-      .select("*")
+      .select(APPOINTMENT_SELECT)
       .eq("appointment_date", tomorrow)
       .eq("status", "Scheduled")
       .or("reminder_sent.is.null,reminder_sent.eq.false")
@@ -211,6 +266,6 @@ export class AiTools {
       .limit(limit);
 
     if (error) throw new Error(`Failed to get pending reminders: ${error.message}`);
-    return data ?? [];
+    return ((data ?? []) as unknown as AppointmentRow[]).map(toAppointment);
   }
 }

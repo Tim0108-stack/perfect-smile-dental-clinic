@@ -5,6 +5,7 @@ import type {
 } from "@shared/types/index";
 
 import { supabase } from "@/lib/supabaseClient";
+import { buildWhatsAppUrl } from "@/lib/whatsapp";
 
 export interface AppointmentPayload {
   patient_name: string;
@@ -14,6 +15,7 @@ export interface AppointmentPayload {
   notes: string | null;
   booking_source: Appointment["booking_source"];
   status?: AppointmentStatus;
+  treatment_id: Appointment["treatment_id"];
 }
 
 async function request<T>(
@@ -28,7 +30,7 @@ async function request<T>(
    * has an expired access token, refreshSession() gives us a
    * current token before sending the request.
    */
-  let { data, error } = await supabase.auth.getSession();
+  const { data, error } = await supabase.auth.getSession();
 
   if (error) {
     throw new Error(
@@ -164,3 +166,52 @@ export const appointmentApi = {
     );
   },
 };
+
+/**
+ * Opens the tomorrow-reminder WhatsApp message for an appointment and
+ * marks it as reminded on success. This is the single shared
+ * implementation used by both the Dashboard reminders queue and the
+ * Calendar appointment detail view, so "a reminder was sent" is
+ * recorded consistently no matter where staff trigger it from.
+ */
+export async function sendTomorrowReminder(
+  appointment: Appointment,
+): Promise<Appointment> {
+  const date = new Date(
+    `${appointment.appointment_date}T00:00:00`,
+  ).toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+
+  const message = `Hello ${appointment.patient_name},
+
+This is a friendly reminder from *Perfect Smile Dental Clinic*.
+
+You have an appointment tomorrow:
+*Date:* ${date}
+*Time:* ${appointment.assigned_slot}
+
+Please arrive *10 minutes early*.
+
+To reschedule, please call us as soon as possible.
+
+Thank you,
+Perfect Smile Dental Clinic`;
+
+  const windowHandle = window.open(
+    buildWhatsAppUrl(appointment.phone_number, message),
+    "_blank",
+  );
+
+  if (!windowHandle) {
+    throw new Error(
+      "WhatsApp could not be opened. Please allow pop-ups and try again.",
+    );
+  }
+
+  windowHandle.opener = null;
+
+  return appointmentApi.markReminder(appointment.id);
+}

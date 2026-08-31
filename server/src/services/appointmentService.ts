@@ -94,6 +94,14 @@ function validateAppointmentInput(value: unknown, partial = false): AppointmentI
   if (data.status !== undefined && !isAppointmentStatus(data.status)) {
     throw new ApiError(400, "Invalid appointment status");
   }
+  if (
+    data.treatment_id !== undefined &&
+    data.treatment_id !== null &&
+    typeof data.treatment_id !== "string" &&
+    typeof data.treatment_id !== "number"
+  ) {
+    throw new ApiError(400, "Invalid treatment");
+  }
   return {
     ...(data.patient_name !== undefined && { patient_name: String(data.patient_name).trim() }),
     ...(data.phone_number !== undefined && { phone_number: String(data.phone_number) }),
@@ -102,6 +110,16 @@ function validateAppointmentInput(value: unknown, partial = false): AppointmentI
     ...(!partial && { status: data.status === undefined ? "Scheduled" : data.status as AppointmentStatus }),
     ...(data.notes !== undefined && { notes: data.notes === null ? null : String(data.notes).trim() }),
     ...(data.booking_source !== undefined && { booking_source: data.booking_source as BookingSource }),
+    ...(partial
+      ? data.treatment_id !== undefined && {
+          treatment_id: data.treatment_id === null ? null : (data.treatment_id as string | number),
+        }
+      : {
+          treatment_id:
+            data.treatment_id === undefined || data.treatment_id === null
+              ? null
+              : (data.treatment_id as string | number),
+        }),
   } as AppointmentInput | Partial<AppointmentInput>;
 }
 

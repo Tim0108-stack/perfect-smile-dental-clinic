@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { Appointment } from "@shared/types/index";
+import type { Appointment, AppointmentStatus } from "@shared/types/index";
 
 import { PageHeader } from "@/components/PageHeader";
+import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
@@ -18,11 +19,18 @@ import {
 
 import {
   APPOINTMENT_STATUSES,
+  computeStatusCounts,
   getInitials,
+  isOverdueToday,
+  isTerminalStatus,
 } from "@/lib/appointments";
 
 import { buildWhatsAppUrl } from "@/lib/whatsapp";
-import { appointmentApi } from "@/services/appointments";
+import {
+  appointmentApi,
+  sendTomorrowReminder,
+} from "@/services/appointments";
+import { useToast } from "@/hooks/useToast";
 
 type CalendarView = "month" | "week" | "day";
 
@@ -86,6 +94,7 @@ const statusDotStyles: Record<Appointment["status"], string> = {
 
 export function CalendarPage() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
 
   const [view, setView] =
     useState<CalendarView>("month");
@@ -131,27 +140,10 @@ export function CalendarPage() {
     [appointments],
   );
 
-  const todayScheduled =
-    todayAppointments.filter(
-      (item) =>
-        item.status === "Scheduled",
-    ).length;
-
-  const todayCompleted =
-    todayAppointments.filter(
-      (item) =>
-        item.status === "Completed",
-    ).length;
-
-  const todayRemaining =
-    todayAppointments.filter(
-      (item) =>
-        ![
-          "Completed",
-          "Cancelled",
-          "No-show",
-        ].includes(item.status),
-    ).length;
+  const todayStats = useMemo(
+    () => computeStatusCounts(todayAppointments),
+    [todayAppointments],
+  );
 
   async function loadAppointments() {
     setLoading(true);
@@ -176,6 +168,118 @@ export function CalendarPage() {
   useEffect(() => {
     void loadAppointments();
   }, []);
+
+  async function updateAppointmentStatus(
+    appointment: Appointment,
+    status: AppointmentStatus,
+    message: string,
+  ) {
+    try {
+      const updated =
+        await appointmentApi.updateStatus(
+          appointment.id,
+          status,
+        );
+
+      setAppointments((current) =>
+        current.map((item) =>
+          item.id === updated.id
+            ? updated
+            : item,
+        ),
+      );
+
+      setSelected((current) =>
+        current && current.id === updated.id
+          ? updated
+          : current,
+      );
+
+      showToast(message, "success");
+    } catch (requestError) {
+      showToast(
+        requestError instanceof Error
+          ? requestError.message
+          : "Failed to update appointment",
+        "error",
+      );
+    }
+  }
+
+  async function completeAppointment(
+    appointment: Appointment,
+  ) {
+    await updateAppointmentStatus(
+      appointment,
+      "Completed",
+      "Appointment marked as completed",
+    );
+  }
+
+  async function cancelAppointment(
+    appointment: Appointment,
+  ) {
+    await updateAppointmentStatus(
+      appointment,
+      "Cancelled",
+      "Appointment marked as cancelled",
+    );
+  }
+
+  async function noShowAppointment(
+    appointment: Appointment,
+  ) {
+    await updateAppointmentStatus(
+      appointment,
+      "No-show",
+      "Appointment marked as no-show",
+    );
+  }
+
+  async function restoreAppointment(
+    appointment: Appointment,
+  ) {
+    await updateAppointmentStatus(
+      appointment,
+      "Scheduled",
+      "Appointment restored to scheduled",
+    );
+  }
+
+  async function sendReminder(
+    appointment: Appointment,
+  ) {
+    try {
+      const updated =
+        await sendTomorrowReminder(appointment);
+
+      setAppointments((current) =>
+        current.map((item) =>
+          item.id === updated.id
+            ? updated
+            : item,
+        ),
+      );
+
+      setSelected((current) =>
+        current && current.id === updated.id
+          ? updated
+          : current,
+      );
+
+      showToast(
+        "WhatsApp opened. Reminder sent.",
+        "success",
+      );
+    } catch (requestError) {
+      showToast(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to trigger reminder",
+        "error",
+      );
+    }
+  }
 
   function navigateDate(
     direction: number,
@@ -297,18 +401,20 @@ export function CalendarPage() {
               />
 
               <OverviewPill
-                label="Scheduled"
-                value={todayScheduled}
+                label="Confirmed"
+                value={todayStats.confirmed}
               />
 
               <OverviewPill
                 label="Completed"
-                value={todayCompleted}
+                value={todayStats.completed}
               />
 
               <OverviewPill
-                label="Remaining"
-                value={todayRemaining}
+                label="Cancelled / no-show"
+                value={
+                  todayStats.cancelledOrNoShow
+                }
               />
             </div>
           </div>
@@ -531,6 +637,26 @@ export function CalendarPage() {
 
           setSelected(null);
         }}
+        onComplete={() =>
+          selected &&
+          void completeAppointment(selected)
+        }
+        onCancel={() =>
+          selected &&
+          void cancelAppointment(selected)
+        }
+        onNoShow={() =>
+          selected &&
+          void noShowAppointment(selected)
+        }
+        onRestore={() =>
+          selected &&
+          void restoreAppointment(selected)
+        }
+        onSendReminder={() =>
+          selected &&
+          void sendReminder(selected)
+        }
       />
     </div>
   );
@@ -1047,10 +1173,20 @@ function AppointmentDetail({
   appointment,
   onClose,
   onEdit,
+  onComplete,
+  onCancel,
+  onNoShow,
+  onRestore,
+  onSendReminder,
 }: {
   appointment: Appointment | null;
   onClose: () => void;
   onEdit: () => void;
+  onComplete: () => void;
+  onCancel: () => void;
+  onNoShow: () => void;
+  onRestore: () => void;
+  onSendReminder: () => void;
 }) {
   if (!appointment) {
     return null;
@@ -1081,6 +1217,28 @@ Please arrive *10 minutes early*.
 Thank you,
 Perfect Smile Dental Clinic`;
 
+  const terminal = isTerminalStatus(
+    appointment.status,
+  );
+
+  const overdue = isOverdueToday(appointment);
+
+  const tomorrow = localDateString(
+    addDays(new Date(), 1),
+  );
+
+  const isTomorrow =
+    appointment.appointment_date === tomorrow;
+
+  const isReminderEligible =
+    isTomorrow &&
+    appointment.status === "Scheduled" &&
+    !appointment.reminder_sent;
+
+  const reminderAlreadySent =
+    isTomorrow &&
+    Boolean(appointment.reminder_sent);
+
   return (
     <Modal
       open={Boolean(appointment)}
@@ -1104,7 +1262,7 @@ Perfect Smile Dental Clinic`;
                 {appointment.patient_name}
               </h3>
 
-              <div className="mt-1.5 flex items-center gap-2">
+              <div className="mt-1.5 flex flex-wrap items-center gap-2">
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${statusDotStyles[appointment.status]}`}
                 />
@@ -1112,6 +1270,12 @@ Perfect Smile Dental Clinic`;
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   {appointment.status}
                 </span>
+
+                {overdue && (
+                  <Badge variant="amber">
+                    Overdue
+                  </Badge>
+                )}
               </div>
             </div>
           </div>
@@ -1148,6 +1312,14 @@ Perfect Smile Dental Clinic`;
             }
           />
 
+          <Detail
+            label="Treatment"
+            value={
+              appointment.treatment_name ||
+              "Not specified"
+            }
+          />
+
           {appointment.notes && (
             <Detail
               label="Notes"
@@ -1159,20 +1331,71 @@ Perfect Smile Dental Clinic`;
           )}
         </div>
 
+        {/* Status actions */}
+        {!terminal ? (
+          <div className="grid grid-cols-3 gap-3">
+            <Button
+              size="sm"
+              onClick={onComplete}
+            >
+              Complete
+            </Button>
+
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={onNoShow}
+            >
+              No-show
+            </Button>
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={onRestore}
+          >
+            Restore to scheduled
+          </Button>
+        )}
+
         {/* Actions */}
         <div className="grid grid-cols-2 gap-3">
-          <a
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100"
-            href={buildWhatsAppUrl(
-              appointment.phone_number,
-              message,
-            )}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <WhatsAppIcon />
-            WhatsApp
-          </a>
+          {isReminderEligible ? (
+            <button
+              type="button"
+              onClick={onSendReminder}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100"
+            >
+              <WhatsAppIcon />
+              Send WhatsApp reminder
+            </button>
+          ) : reminderAlreadySent ? (
+            <span className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-xs font-bold text-emerald-700">
+              Reminder sent
+            </span>
+          ) : (
+            <a
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100"
+              href={buildWhatsAppUrl(
+                appointment.phone_number,
+                message,
+              )}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <WhatsAppIcon />
+              WhatsApp
+            </a>
+          )}
 
           <Button onClick={onEdit}>
             Edit appointment

@@ -56,7 +56,8 @@ export interface GetUpcomingAppointmentsParams {
 export interface GetAppointmentSummaryParams {
   start_date: string;
   end_date: string;
-  appointment_type?: string;
+  /** Optional treatment name, matched against the real treatments catalog. */
+  treatment?: string;
 }
 
 export interface SearchPatientParams {
@@ -84,8 +85,10 @@ export interface GetScheduleConflictsParams {
 export interface AppointmentSummary {
   total: number;
   by_status: Record<string, number>;
-  by_type?: Record<string, number>;
-  consultations?: number;
+  /** Counts per real treatment name (from the treatments table), plus "Not specified" for appointments with no treatment set. */
+  by_treatment?: Record<string, number>;
+  /** The real treatment name that `treatment` was resolved to, when a filter was applied. */
+  matched_treatment?: string;
   follow_ups?: number;
   cancellations?: number;
   no_shows?: number;

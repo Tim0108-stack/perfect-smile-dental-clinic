@@ -6,6 +6,7 @@ import { healthRouter } from "./routes/health.js";
 import { appointmentsRouter } from "./routes/appointments.js";
 import { followUpsRouter } from "./routes/followUps.js";
 import { reportsRouter } from "./routes/reports.js";
+import { treatmentsRouter } from "./routes/treatments.js";
 import { aiRouter } from "./routes/ai.js";
 
 const app = express();
@@ -24,6 +25,7 @@ app.use("/api/health", healthRouter);
 app.use("/api/appointments", appointmentsRouter);
 app.use("/api/follow-ups", followUpsRouter);
 app.use("/api/reports", reportsRouter);
+app.use("/api/treatments", treatmentsRouter);
 app.use("/api/ai", aiRouter);
 
 // ── 404 + error handling (must be registered last) ──────────────

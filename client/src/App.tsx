@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/layouts/AppShell";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { AppointmentsPage } from "@/pages/AppointmentsPage";
 import { CalendarPage } from "@/pages/CalendarPage";
 import { FollowUpsPage } from "@/pages/FollowUpsPage";
 import { ReportsPage } from "@/pages/ReportsPage";
@@ -18,6 +19,7 @@ export function App() {
           <Route element={<AppShell />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/appointments" element={<AppointmentsPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/follow-ups" element={<FollowUpsPage />} />
           <Route path="/reports" element={<ReportsPage />} />

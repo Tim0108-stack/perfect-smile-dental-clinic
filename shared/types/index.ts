@@ -37,6 +37,20 @@ export interface Appointment {
   created_at?: string;
   reminder_sent?: boolean | null;
   reminder_sent_date?: string | null;
+  /** Real FK into `treatments.id`, or null when no treatment is set. */
+  treatment_id: number | string | null;
+  /** Read-only: the treatment's name, resolved server-side from `treatments`. */
+  treatment_name?: string | null;
+}
+
+/** A treatment the clinic offers. Stored, not hard-coded — new rows can be
+ *  added to the `treatments` table at any time without a code change. */
+export interface Treatment {
+  id: number | string;
+  name: string;
+  is_active: boolean;
+  display_order: number;
+  created_at?: string;
 }
 
 export type FollowUpStatus = "Open" | "Completed";
@@ -76,6 +90,7 @@ export interface ReportAppointment {
   assigned_slot: string;
   status: AppointmentStatus;
   booking_source: BookingSource;
+  treatment_name: string | null;
 }
 
 /** Primary workspace navigation sections in the clinic app shell. */

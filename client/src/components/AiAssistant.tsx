@@ -8,8 +8,10 @@ const EMPTY_STATE_SUGGESTIONS = [
   "Summarize tomorrow's appointments",
   "What's happening today?",
   "Who needs attention?",
-  "How many consultations are booked this week?",
-  "Show me the upcoming appointments",
+  "How many root canal treatments were done this week?",
+  "How many Invisalign appointments were booked this month?",
+  "How many dental cleanings were completed this week?",
+  "Which treatments were most common this month?",
 ];
 
 export function AiAssistant() {

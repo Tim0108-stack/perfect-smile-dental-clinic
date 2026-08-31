@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { BookingSource, ReportAppointment } from "@shared/types/index";
+import type { BookingSource, ReportAppointment, Treatment } from "@shared/types/index";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -8,8 +8,10 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { Select } from "@/components/ui/Select";
+import { computeStatusCounts } from "@/lib/appointments";
 import { localDateString } from "@/lib/date";
 import { appointmentApi } from "@/services/appointments";
+import { treatmentApi } from "@/services/treatments";
 
 type Period = "today" | "week" | "month" | "custom";
 
@@ -86,6 +88,11 @@ export function ReportsPage() {
   const [records, setRecords] = useState<ReportAppointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [treatments, setTreatments] = useState<Treatment[]>([]);
+
+  useEffect(() => {
+    treatmentApi.list().then(setTreatments).catch(() => setTreatments([]));
+  }, []);
 
   const range = periodRange(
     period,
@@ -141,18 +148,14 @@ export function ReportsPage() {
    * Bookings = every appointment record in the period.
    * Completed = appointments that actually happened.
    * Cancelled / no-show = appointments that did not happen.
+   *
+   * Uses the same shared status-tally logic as Dashboard and
+   * Calendar so these definitions can't drift apart.
    */
-  const bookings = records.length;
-
-  const completed = records.filter(
-    (record) => record.status === "Completed",
-  ).length;
-
-  const cancelledOrNoShow = records.filter(
-    (record) =>
-      record.status === "Cancelled" ||
-      record.status === "No-show",
-  ).length;
+  const stats = computeStatusCounts(records);
+  const bookings = stats.total;
+  const completed = stats.completed;
+  const cancelledOrNoShow = stats.cancelledOrNoShow;
 
   const completionRate =
     bookings > 0
@@ -165,6 +168,27 @@ export function ReportsPage() {
           (cancelledOrNoShow / bookings) * 100,
         )
       : 0;
+
+  /*
+   * Treatment breakdown reuses the real treatments catalog (not a
+   * hardcoded list) so counts stay in sync with whatever the clinic
+   * has seeded, including any treatments added after this shipped.
+   */
+  const treatmentBreakdownValues: [string, number][] = treatments.map(
+    (treatment) => [
+      treatment.name,
+      records.filter((record) => record.treatment_name === treatment.name)
+        .length,
+    ],
+  );
+
+  const untreatedCount = records.filter(
+    (record) => !record.treatment_name,
+  ).length;
+
+  if (untreatedCount > 0) {
+    treatmentBreakdownValues.push(["Not specified", untreatedCount]);
+  }
 
   return (
     <div className="space-y-6">
@@ -358,6 +382,18 @@ export function ReportsPage() {
                 total={bookings}
               />
             </section>
+
+            {/* Treatments */}
+            {treatmentBreakdownValues.length > 0 && (
+              <section className="mt-6">
+                <Breakdown
+                  title="Treatments this period"
+                  description="What patients were booked in for, from the clinic's treatment catalog."
+                  values={treatmentBreakdownValues}
+                  total={bookings}
+                />
+              </section>
+            )}
           </CardBody>
         )}
       </Card>
@@ -534,6 +570,7 @@ function exportCsv(records: ReportAppointment[]) {
     "Assigned Slot",
     "Status",
     "Booking Source",
+    "Treatment",
   ];
 
   const escape = (value: string) =>
@@ -547,6 +584,7 @@ function exportCsv(records: ReportAppointment[]) {
       record.assigned_slot,
       record.status,
       record.booking_source,
+      record.treatment_name || "",
     ]
       .map(escape)
       .join(","),

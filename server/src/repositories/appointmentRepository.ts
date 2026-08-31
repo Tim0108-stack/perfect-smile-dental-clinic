@@ -12,4 +12,4 @@ export interface AppointmentRepository {
   markReminder(id: number | string, reminderDate: string): Promise<Appointment>;
 }
 
-export type AppointmentInput = Omit<Appointment, "id" | "created_at" | "reminder_sent" | "reminder_sent_date">;
+export type AppointmentInput = Omit<Appointment, "id" | "created_at" | "reminder_sent" | "reminder_sent_date" | "treatment_name">;

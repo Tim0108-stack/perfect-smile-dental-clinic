@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type {
   Appointment,
   AppointmentStatus,
 } from "@shared/types/index";
 
-import { PageHeader } from "@/components/PageHeader";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
   Card,
@@ -17,35 +16,33 @@ import {
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
-import { Modal } from "@/components/ui/Modal";
+import { PageHeader } from "@/components/PageHeader";
 
 import {
+  computeStatusCounts,
+  displayStatusLabel,
+  isOverdueToday,
+  isTerminalStatus,
   parseSlotMinutes,
-  sourceStyles,
+  selectFocusAppointment,
 } from "@/lib/appointments";
 import { localDateString } from "@/lib/date";
-import { buildWhatsAppUrl } from "@/lib/whatsapp";
-import { appointmentApi } from "@/services/appointments";
+import {
+  appointmentApi,
+  sendTomorrowReminder,
+} from "@/services/appointments";
 import { useToast } from "@/hooks/useToast";
-
-type DateFilter = "all" | "today" | "week" | "month";
 
 export function DashboardPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const searchRef = useRef<HTMLInputElement>(null);
 
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [search, setSearch] = useState("");
-  const [dateFilter, setDateFilter] =
-    useState<DateFilter>("all");
-
-  const [deleteTarget, setDeleteTarget] =
-    useState<Appointment | null>(null);
-  const [deleting, setDeleting] = useState(false);
+  const [manualFocusId, setManualFocusId] =
+    useState<Appointment["id"] | null>(null);
 
   const [pendingReminders, setPendingReminders] =
     useState<Appointment[]>([]);
@@ -110,124 +107,53 @@ export function DashboardPage() {
       appointment.appointment_date === today,
   );
 
-  const completedToday = todayAppointments.filter(
-    (appointment) =>
-      appointment.status === "Completed",
-  );
-
-  const cancelledToday = todayAppointments.filter(
-    (appointment) =>
-      appointment.status === "Cancelled" ||
-      appointment.status === "No-show",
-  );
+  const todayStats = computeStatusCounts(todayAppointments);
 
   const progress =
-    todayAppointments.length > 0
+    todayStats.total > 0
       ? Math.round(
-          (completedToday.length /
-            todayAppointments.length) *
-            100,
+          (todayStats.completed / todayStats.total) * 100,
         )
       : 0;
 
-  const visibleAppointments = useMemo(() => {
-    return appointments.filter((appointment) => {
-      const term = search.trim().toLowerCase();
+  /*
+   * The focus panel shows whichever appointment was explicitly
+   * selected from the queue below, or otherwise the automatically
+   * derived one: an overdue-and-unresolved appointment first, then
+   * the earliest still-upcoming confirmed appointment.
+   */
+  const autoFocusAppointment = selectFocusAppointment(
+    todayAppointments,
+  );
 
-      const matchesSearch =
-        !term ||
-        appointment.patient_name
-          .toLowerCase()
-          .includes(term) ||
-        appointment.phone_number.includes(term);
+  const manualFocusAppointment =
+    manualFocusId != null
+      ? todayAppointments.find(
+          (appointment) =>
+            appointment.id === manualFocusId,
+        )
+      : undefined;
 
-      const matchesDate =
-        dateFilter === "all" ||
-        (dateFilter === "today" &&
-          appointment.appointment_date === today) ||
-        (dateFilter === "week" &&
-          appointment.appointment_date >= today &&
-          appointment.appointment_date <=
-            localDateString(
-              new Date(
-                Date.now() + 7 * 86400000,
-              ),
-            )) ||
-        (dateFilter === "month" &&
-          appointment.appointment_date.slice(0, 7) ===
-            today.slice(0, 7));
+  const focusAppointment =
+    manualFocusAppointment ?? autoFocusAppointment;
 
-      return matchesSearch && matchesDate;
-    });
-  }, [
-    appointments,
-    dateFilter,
-    search,
-    today,
-  ]);
+  const focusIsOverdue = focusAppointment
+    ? isOverdueToday(focusAppointment)
+    : false;
 
-  const nextAppointment = todayAppointments
-    .filter((appointment) =>
-      isConfirmed(appointment.status),
-    )
-    .map((appointment) => ({
-      appointment,
-      minutes: parseSlotMinutes(
-        appointment.assigned_slot,
-      ),
-    }))
-    .filter(
-      (
-        item,
-      ): item is {
-        appointment: Appointment;
-        minutes: number;
-      } => item.minutes !== null,
-    )
-    .filter((item) => {
-      const now = new Date();
+  const sortedQueue = [...todayAppointments].sort(
+    (a, b) => {
+      const aMinutes =
+        parseSlotMinutes(a.assigned_slot) ??
+        Number.MAX_SAFE_INTEGER;
 
-      const currentMinutes =
-        now.getHours() * 60 +
-        now.getMinutes();
+      const bMinutes =
+        parseSlotMinutes(b.assigned_slot) ??
+        Number.MAX_SAFE_INTEGER;
 
-      return item.minutes >= currentMinutes;
-    })
-    .sort(
-      (a, b) => a.minutes - b.minutes,
-    )[0]?.appointment;
-
-  const upcomingAppointments = useMemo(() => {
-    return appointments
-      .filter(
-        (appointment) =>
-          appointment.appointment_date >=
-            today &&
-          isConfirmed(appointment.status),
-      )
-      .sort((a, b) => {
-        if (
-          a.appointment_date !==
-          b.appointment_date
-        ) {
-          return a.appointment_date.localeCompare(
-            b.appointment_date,
-          );
-        }
-
-        const aMinutes =
-          parseSlotMinutes(
-            a.assigned_slot,
-          ) ?? Number.MAX_SAFE_INTEGER;
-
-        const bMinutes =
-          parseSlotMinutes(
-            b.assigned_slot,
-          ) ?? Number.MAX_SAFE_INTEGER;
-
-        return aMinutes - bMinutes;
-      });
-  }, [appointments, today]);
+      return aMinutes - bMinutes;
+    },
+  );
 
   async function updateStatus(
     appointment: Appointment,
@@ -260,6 +186,12 @@ export function DashboardPage() {
     }
   }
 
+  /*
+   * Resolving the focused appointment clears the manual selection so
+   * the panel automatically advances to whatever needs attention next
+   * (overdue first, then earliest upcoming) — the behavior we're
+   * preserving from the original Next Appointment card.
+   */
   async function markCompleted(
     appointment: Appointment,
   ) {
@@ -268,6 +200,7 @@ export function DashboardPage() {
       "Completed",
       "Appointment marked as completed",
     );
+    setManualFocusId(null);
   }
 
   async function markCancelled(
@@ -276,93 +209,43 @@ export function DashboardPage() {
     await updateStatus(
       appointment,
       "Cancelled",
-      "Appointment marked as cancelled / no-show",
+      "Appointment marked as cancelled",
     );
+    setManualFocusId(null);
   }
 
-  async function confirmDelete() {
-    if (!deleteTarget) return;
+  async function markNoShow(
+    appointment: Appointment,
+  ) {
+    await updateStatus(
+      appointment,
+      "No-show",
+      "Appointment marked as no-show",
+    );
+    setManualFocusId(null);
+  }
 
-    setDeleting(true);
-
-    try {
-      await appointmentApi.remove(
-        deleteTarget.id,
-      );
-
-      setAppointments((current) =>
-        current.filter(
-          (item) =>
-            item.id !== deleteTarget.id,
-        ),
-      );
-
-      setDeleteTarget(null);
-
-      showToast(
-        "Appointment deleted successfully",
-        "success",
-      );
-    } catch (requestError) {
-      showToast(
-        requestError instanceof Error
-          ? requestError.message
-          : "Failed to delete appointment",
-        "error",
-      );
-    } finally {
-      setDeleting(false);
-    }
+  /*
+   * Restoring does NOT clear manual focus: staff just fixed a mistake
+   * and almost always want to immediately decide what to actually do
+   * with the appointment, so it stays focused and actionable.
+   */
+  async function restoreAppointment(
+    appointment: Appointment,
+  ) {
+    await updateStatus(
+      appointment,
+      "Scheduled",
+      "Appointment restored to scheduled",
+    );
   }
 
   async function sendReminder(
     appointment: Appointment,
   ) {
-    const date = new Date(
-      `${appointment.appointment_date}T00:00:00`,
-    ).toLocaleDateString("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-    });
-
-    const message = `Hello ${appointment.patient_name},
-
-This is a friendly reminder from *Perfect Smile Dental Clinic*.
-
-You have an appointment tomorrow:
-*Date:* ${date}
-*Time:* ${appointment.assigned_slot}
-
-Please arrive *10 minutes early*.
-
-To reschedule, please call us as soon as possible.
-
-Thank you,
-Perfect Smile Dental Clinic`;
-
     try {
-      const windowHandle =
-        window.open(
-          buildWhatsAppUrl(
-            appointment.phone_number,
-            message,
-          ),
-          "_blank",
-        );
-
-      if (!windowHandle) {
-        throw new Error(
-          "WhatsApp could not be opened. Please allow pop-ups and try again.",
-        );
-      }
-
-      windowHandle.opener = null;
-
       const updated =
-        await appointmentApi.markReminder(
-          appointment.id,
-        );
+        await sendTomorrowReminder(appointment);
 
       setPendingReminders((current) =>
         current.filter(
@@ -423,26 +306,13 @@ Perfect Smile Dental Clinic`;
         title={`${greeting}.`}
         description={formattedDate}
         action={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="secondary"
-              onClick={() =>
-                searchRef.current?.focus()
-              }
-            >
-              Search patients
-            </Button>
-
-            <Button
-              onClick={() =>
-                navigate(
-                  "/appointments/new",
-                )
-              }
-            >
-              + New appointment
-            </Button>
-          </div>
+          <Button
+            onClick={() =>
+              navigate("/appointments/new")
+            }
+          >
+            + New appointment
+          </Button>
         }
       />
 
@@ -490,22 +360,18 @@ Perfect Smile Dental Clinic`;
 
                 <div className="mt-7 grid max-w-xl grid-cols-3 gap-2.5">
                   <OverviewStat
-                    value={
-                      todayAppointments.length
-                    }
+                    value={todayStats.total}
                     label="Bookings"
                   />
 
                   <OverviewStat
-                    value={
-                      completedToday.length
-                    }
+                    value={todayStats.completed}
                     label="Completed"
                   />
 
                   <OverviewStat
                     value={
-                      cancelledToday.length
+                      todayStats.cancelledOrNoShow
                     }
                     label="Cancelled / no-show"
                   />
@@ -521,10 +387,10 @@ Perfect Smile Dental Clinic`;
           </section>
 
           {/* =========================================================
-              SCHEDULE + NEXT APPOINTMENT
+              TODAY'S QUEUE + FOCUSED APPOINTMENT
           ========================================================= */}
 
-          <div className="grid gap-5 xl:grid-cols-[1.6fr_0.8fr]">
+          <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
             <Card className="overflow-hidden">
               <CardHeader className="flex items-center justify-between">
                 <div>
@@ -533,9 +399,8 @@ Perfect Smile Dental Clinic`;
                   </CardTitle>
 
                   <p className="mt-1 text-xs text-slate-500">
-                    Complete or cancel each
-                    appointment when the visit is
-                    finished.
+                    Select any appointment to
+                    bring it into focus.
                   </p>
                 </div>
 
@@ -549,50 +414,32 @@ Perfect Smile Dental Clinic`;
               </CardHeader>
 
               <CardBody>
-                {todayAppointments.length ===
-                0 ? (
+                {sortedQueue.length === 0 ? (
                   <EmptyState
                     title="No appointments scheduled today"
                     description="Your schedule is currently clear."
                   />
                 ) : (
                   <div className="space-y-1">
-                    {[...todayAppointments]
-                      .sort((a, b) => {
-                        const aMinutes =
-                          parseSlotMinutes(
-                            a.assigned_slot,
-                          ) ??
-                          Number.MAX_SAFE_INTEGER;
-
-                        const bMinutes =
-                          parseSlotMinutes(
-                            b.assigned_slot,
-                          ) ??
-                          Number.MAX_SAFE_INTEGER;
-
-                        return (
-                          aMinutes - bMinutes
-                        );
-                      })
-                      .map((appointment) => (
-                        <ScheduleRow
+                    {sortedQueue.map(
+                      (appointment) => (
+                        <QueueRow
                           key={appointment.id}
                           appointment={
                             appointment
                           }
-                          onComplete={() =>
-                            void markCompleted(
-                              appointment,
-                            )
+                          isFocused={
+                            focusAppointment?.id ===
+                            appointment.id
                           }
-                          onCancel={() =>
-                            void markCancelled(
-                              appointment,
+                          onSelect={() =>
+                            setManualFocusId(
+                              appointment.id,
                             )
                           }
                         />
-                      ))}
+                      ),
+                    )}
                   </div>
                 )}
               </CardBody>
@@ -601,70 +448,132 @@ Perfect Smile Dental Clinic`;
             <Card>
               <CardHeader>
                 <CardTitle>
-                  Next appointment
+                  {focusIsOverdue
+                    ? "Needs attention"
+                    : "Next appointment"}
                 </CardTitle>
 
                 <p className="mt-1 text-xs text-slate-500">
-                  The next confirmed patient
-                  today.
+                  {focusIsOverdue
+                    ? "This appointment is overdue and should be resolved first."
+                    : "The next confirmed patient today."}
                 </p>
               </CardHeader>
 
               <CardBody>
-                {nextAppointment ? (
-                  <div className="rounded-2xl border border-teal-100 bg-teal-50/50 p-5">
+                {focusAppointment ? (
+                  <div
+                    className={`rounded-2xl border p-5 ${
+                      focusIsOverdue
+                        ? "border-amber-200 bg-amber-50/60"
+                        : "border-teal-100 bg-teal-50/50"
+                    }`}
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-xs font-bold uppercase tracking-wider text-teal-700">
+                        <p
+                          className={`text-xs font-bold uppercase tracking-wider ${
+                            focusIsOverdue
+                              ? "text-amber-700"
+                              : "text-teal-700"
+                          }`}
+                        >
                           {
-                            nextAppointment.assigned_slot
+                            focusAppointment.assigned_slot
                           }
                         </p>
 
                         <p className="mt-2 text-xl font-bold capitalize text-slate-950">
                           {
-                            nextAppointment.patient_name
+                            focusAppointment.patient_name
                           }
                         </p>
 
                         <p className="mt-1 text-xs text-slate-500">
                           {
-                            nextAppointment.phone_number
+                            focusAppointment.phone_number
                           }
                         </p>
+
+                        {focusAppointment.treatment_name && (
+                          <p className="mt-1 text-xs font-semibold text-teal-700">
+                            {
+                              focusAppointment.treatment_name
+                            }
+                          </p>
+                        )}
                       </div>
 
-                      <StatusBadge
-                        status={
-                          nextAppointment.status
-                        }
-                      />
+                      <div className="flex flex-col items-end gap-1.5">
+                        <StatusBadge
+                          status={
+                            focusAppointment.status
+                          }
+                        />
+
+                        {focusIsOverdue && (
+                          <Badge variant="amber">
+                            Overdue
+                          </Badge>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="mt-5 grid grid-cols-2 gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          void markCompleted(
-                            nextAppointment,
-                          )
-                        }
-                      >
-                        Complete
-                      </Button>
+                    {isTerminalStatus(
+                      focusAppointment.status,
+                    ) ? (
+                      <div className="mt-5">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="w-full"
+                          onClick={() =>
+                            void restoreAppointment(
+                              focusAppointment,
+                            )
+                          }
+                        >
+                          Restore to scheduled
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="mt-5 grid grid-cols-3 gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            void markCompleted(
+                              focusAppointment,
+                            )
+                          }
+                        >
+                          Complete
+                        </Button>
 
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          void markCancelled(
-                            nextAppointment,
-                          )
-                        }
-                      >
-                        Cancel / no-show
-                      </Button>
-                    </div>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() =>
+                            void markCancelled(
+                              focusAppointment,
+                            )
+                          }
+                        >
+                          Cancel
+                        </Button>
+
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() =>
+                            void markNoShow(
+                              focusAppointment,
+                            )
+                          }
+                        >
+                          No-show
+                        </Button>
+                      </div>
+                    )}
 
                     <button
                       type="button"
@@ -674,14 +583,14 @@ Perfect Smile Dental Clinic`;
                           {
                             state: {
                               appointment:
-                                nextAppointment,
+                                focusAppointment,
                             },
                           },
                         )
                       }
                       className="group mt-3 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-xs font-bold text-slate-700 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700"
                     >
-                      View appointment
+                      Edit appointment
                       <ArrowIcon />
                     </button>
                   </div>
@@ -715,348 +624,8 @@ Perfect Smile Dental Clinic`;
               }
             />
           </div>
-
-          {/* =========================================================
-              UPCOMING SNAPSHOT
-          ========================================================= */}
-
-          <Card>
-            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <CardTitle>
-                  Upcoming appointments
-                </CardTitle>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  A quick look at the next
-                  confirmed patients.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  navigate("/appointments")
-                }
-                className="w-fit text-xs font-bold text-teal-700 transition hover:text-teal-900"
-              >
-                View calendar
-                <span className="ml-1">
-                  →
-                </span>
-              </button>
-            </CardHeader>
-
-            <CardBody>
-              {upcomingAppointments.length ===
-              0 ? (
-                <EmptyState
-                  title="No upcoming appointments"
-                  description="There are currently no confirmed appointments ahead."
-                />
-              ) : (
-                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                  {upcomingAppointments
-                    .slice(0, 6)
-                    .map((appointment) => (
-                      <UpcomingAppointmentCard
-                        key={appointment.id}
-                        appointment={
-                          appointment
-                        }
-                      />
-                    ))}
-                </div>
-              )}
-            </CardBody>
-          </Card>
-
-          {/* =========================================================
-              APPOINTMENT MANAGEMENT
-          ========================================================= */}
-
-          <Card className="overflow-hidden">
-            <CardHeader>
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <CardTitle>
-                    Appointment management
-                  </CardTitle>
-
-                  <p className="mt-1 text-xs text-slate-500">
-                    Search, edit or take action
-                    on patient bookings.
-                  </p>
-                </div>
-
-                <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-bold text-slate-500">
-                  {visibleAppointments.length}{" "}
-                  results
-                </span>
-              </div>
-            </CardHeader>
-
-            <CardBody>
-              <div className="mb-5 flex flex-col gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3 sm:flex-row">
-                <div className="relative flex-1">
-                  <SearchIcon />
-
-                  <input
-                    ref={searchRef}
-                    value={search}
-                    onChange={(event) =>
-                      setSearch(
-                        event.target.value,
-                      )
-                    }
-                    placeholder="Search patient name or phone..."
-                    className="field-control w-full rounded-lg border bg-white py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-teal-300 focus:ring-2 focus:ring-teal-100"
-                  />
-                </div>
-
-                <select
-                  value={dateFilter}
-                  onChange={(event) =>
-                    setDateFilter(
-                      event.target
-                        .value as DateFilter,
-                    )
-                  }
-                  className="field-control rounded-lg border bg-white px-3 py-2.5 text-sm outline-none transition focus:border-teal-300 focus:ring-2 focus:ring-teal-100"
-                >
-                  <option value="all">
-                    All dates
-                  </option>
-
-                  <option value="today">
-                    Today
-                  </option>
-
-                  <option value="week">
-                    This week
-                  </option>
-
-                  <option value="month">
-                    This month
-                  </option>
-                </select>
-              </div>
-
-              {visibleAppointments.length ===
-              0 ? (
-                <EmptyState
-                  title="No appointments found"
-                  description={
-                    appointments.length
-                      ? "Try changing the search or date filter."
-                      : "Create your first appointment to begin managing patients."
-                  }
-                />
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-100">
-                  <table className="w-full min-w-[980px] text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-100 bg-slate-50/70">
-                        <Header>
-                          Patient
-                        </Header>
-
-                        <Header>
-                          Phone
-                        </Header>
-
-                        <Header>
-                          Date
-                        </Header>
-
-                        <Header>
-                          Time
-                        </Header>
-
-                        <Header>
-                          Source
-                        </Header>
-
-                        <Header>
-                          Status
-                        </Header>
-
-                        <Header>
-                          Actions
-                        </Header>
-                      </tr>
-                    </thead>
-
-                    <tbody className="divide-y divide-slate-100">
-                      {visibleAppointments.map(
-                        (appointment) => (
-                          <AppointmentRow
-                            key={
-                              appointment.id
-                            }
-                            appointment={
-                              appointment
-                            }
-                            onEdit={() =>
-                              navigate(
-                                "/appointments/new",
-                                {
-                                  state: {
-                                    appointment,
-                                  },
-                                },
-                              )
-                            }
-                            onDelete={() =>
-                              setDeleteTarget(
-                                appointment,
-                              )
-                            }
-                            onComplete={() =>
-                              void markCompleted(
-                                appointment,
-                              )
-                            }
-                            onCancel={() =>
-                              void markCancelled(
-                                appointment,
-                              )
-                            }
-                          />
-                        ),
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardBody>
-          </Card>
         </>
       )}
-
-      {/* =============================================================
-          DELETE MODAL
-      ============================================================= */}
-
-      <Modal
-        open={Boolean(deleteTarget)}
-        onClose={() =>
-          setDeleteTarget(null)
-        }
-        title="Delete appointment"
-      >
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
-          <TrashIcon />
-        </div>
-
-        <p className="mt-4 text-sm leading-6 text-slate-500">
-          Are you sure you want to permanently
-          delete this appointment? This action
-          cannot be undone.
-        </p>
-
-        {deleteTarget && (
-          <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-4">
-            <p className="text-sm font-bold capitalize text-slate-900">
-              {
-                deleteTarget.patient_name
-              }
-            </p>
-
-            <p className="mt-1 text-xs text-slate-500">
-              {
-                deleteTarget.appointment_date
-              }{" "}
-              ·{" "}
-              {
-                deleteTarget.assigned_slot
-              }
-            </p>
-          </div>
-        )}
-
-        <div className="mt-6 flex justify-end gap-3">
-          <Button
-            variant="secondary"
-            onClick={() =>
-              setDeleteTarget(null)
-            }
-          >
-            Keep appointment
-          </Button>
-
-          <Button
-            variant="danger"
-            disabled={deleting}
-            onClick={() =>
-              void confirmDelete()
-            }
-          >
-            {deleting
-              ? "Deleting..."
-              : "Delete appointment"}
-          </Button>
-        </div>
-      </Modal>
-    </div>
-  );
-}
-
-/* =================================================================
-   UPCOMING APPOINTMENT CARD
-================================================================= */
-
-function UpcomingAppointmentCard({
-  appointment,
-}: {
-  appointment: Appointment;
-}) {
-  const formattedDate =
-    new Date(
-      `${appointment.appointment_date}T00:00:00`,
-    ).toLocaleDateString("en-GB", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-    });
-
-  return (
-    <div className="group rounded-2xl border border-slate-100 bg-white p-4 transition hover:border-teal-100 hover:bg-teal-50/20">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-[10px] font-bold text-teal-700">
-            {getInitials(
-              appointment.patient_name,
-            )}
-          </div>
-
-          <div className="min-w-0">
-            <p className="truncate text-sm font-bold capitalize text-slate-900">
-              {
-                appointment.patient_name
-              }
-            </p>
-
-            <p className="mt-0.5 text-xs text-slate-400">
-              {formattedDate}
-            </p>
-          </div>
-        </div>
-
-        <StatusBadge
-          status={appointment.status}
-        />
-      </div>
-
-      <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-        <span className="text-xs font-bold text-slate-700">
-          {appointment.assigned_slot}
-        </span>
-
-        <span className="text-[10px] font-semibold text-slate-400">
-          {appointment.booking_source}
-        </span>
-      </div>
     </div>
   );
 }
@@ -1216,27 +785,38 @@ function ReminderRow({
 }
 
 /* =================================================================
-   SCHEDULE ROW
+   QUEUE ROW (compact, click-to-focus, no inline actions)
 ================================================================= */
 
-function ScheduleRow({
+function QueueRow({
   appointment,
-  onComplete,
-  onCancel,
+  isFocused,
+  onSelect,
 }: {
   appointment: Appointment;
-  onComplete: () => void;
-  onCancel: () => void;
+  isFocused: boolean;
+  onSelect: () => void;
 }) {
-  const completed =
+  const isCompleted =
     appointment.status === "Completed";
 
-  const cancelled =
-    appointment.status === "Cancelled" ||
-    appointment.status === "No-show";
+  const terminal = isTerminalStatus(
+    appointment.status,
+  );
+
+  const overdue = isOverdueToday(appointment);
 
   return (
-    <div className="group flex flex-col gap-3 rounded-xl px-3 py-3 transition hover:bg-slate-50 sm:flex-row sm:items-center">
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={isFocused}
+      className={`flex w-full flex-col gap-3 rounded-xl border px-3 py-3 text-left transition sm:flex-row sm:items-center ${
+        isFocused
+          ? "border-teal-200 bg-teal-50/60"
+          : "border-transparent hover:bg-slate-50"
+      }`}
+    >
       <div className="w-20 shrink-0">
         <p className="text-xs font-bold text-slate-700">
           {appointment.assigned_slot}
@@ -1246,9 +826,9 @@ function ScheduleRow({
       <div className="relative flex shrink-0 items-center justify-center">
         <span
           className={`absolute h-5 w-5 rounded-full ${
-            completed
+            isCompleted
               ? "bg-emerald-50"
-              : cancelled
+              : terminal
                 ? "bg-rose-50"
                 : "bg-teal-50"
           }`}
@@ -1256,9 +836,9 @@ function ScheduleRow({
 
         <span
           className={`relative h-2 w-2 rounded-full ${
-            completed
+            isCompleted
               ? "bg-emerald-500"
-              : cancelled
+              : terminal
                 ? "bg-rose-500"
                 : "bg-teal-500"
           }`}
@@ -1275,142 +855,30 @@ function ScheduleRow({
         </p>
       </div>
 
-      <StatusBadge
-        status={appointment.status}
-      />
-
-      {!completed && !cancelled && (
-        <div className="flex shrink-0 gap-2">
-          <Button
-            size="sm"
-            onClick={onComplete}
-          >
-            Complete
-          </Button>
-
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={onCancel}
-          >
-            Cancel / no-show
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* =================================================================
-   APPOINTMENT TABLE ROW
-================================================================= */
-
-function AppointmentRow({
-  appointment,
-  onEdit,
-  onDelete,
-  onComplete,
-  onCancel,
-}: {
-  appointment: Appointment;
-  onEdit: () => void;
-  onDelete: () => void;
-  onComplete: () => void;
-  onCancel: () => void;
-}) {
-  const completed =
-    appointment.status === "Completed";
-
-  const cancelled =
-    appointment.status === "Cancelled" ||
-    appointment.status === "No-show";
-
-  return (
-    <tr className="group transition hover:bg-slate-50/70">
-      <td className="px-4 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-[10px] font-bold text-teal-700">
-            {getInitials(
-              appointment.patient_name,
-            )}
-          </div>
-
-          <span className="font-bold capitalize text-slate-900">
-            {appointment.patient_name}
-          </span>
-        </div>
-      </td>
-
-      <td className="px-4 py-4 text-slate-500">
-        {appointment.phone_number}
-      </td>
-
-      <td className="px-4 py-4 text-slate-600">
-        {appointment.appointment_date}
-      </td>
-
-      <td className="px-4 py-4 font-semibold text-slate-800">
-        {appointment.assigned_slot}
-      </td>
-
-      <td className="px-4 py-4">
+      <div className="shrink-0">
         <span
-          className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${
-            sourceStyles[
-              appointment.booking_source
-            ]
+          className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-bold ${
+            appointment.treatment_name
+              ? "border-teal-100 bg-teal-50 text-teal-700"
+              : "border-slate-100 bg-slate-50 text-slate-400"
           }`}
         >
-          {appointment.booking_source}
+          {appointment.treatment_name || "No treatment"}
         </span>
-      </td>
+      </div>
 
-      <td className="px-4 py-4">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
         <StatusBadge
           status={appointment.status}
         />
-      </td>
 
-      <td className="px-4 py-4">
-        <div className="flex flex-wrap items-center gap-2">
-          {!completed && !cancelled && (
-            <>
-              <button
-                type="button"
-                className="rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100"
-                onClick={onComplete}
-              >
-                Complete
-              </button>
-
-              <button
-                type="button"
-                className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 transition hover:bg-rose-100"
-                onClick={onCancel}
-              >
-                Cancel / no-show
-              </button>
-            </>
-          )}
-
-          <button
-            type="button"
-            className="text-xs font-bold text-teal-700 transition hover:text-teal-900"
-            onClick={onEdit}
-          >
-            Edit
-          </button>
-
-          <button
-            type="button"
-            className="text-xs font-bold text-rose-600 transition hover:text-rose-700"
-            onClick={onDelete}
-          >
-            Delete
-          </button>
-        </div>
-      </td>
-    </tr>
+        {overdue && (
+          <Badge variant="amber">
+            Overdue
+          </Badge>
+        )}
+      </div>
+    </button>
   );
 }
 
@@ -1423,12 +891,13 @@ function StatusBadge({
 }: {
   status: AppointmentStatus;
 }) {
-  const label = displayStatus(status);
+  const label = displayStatusLabel(status);
 
   const styles =
     label === "Completed"
       ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-      : label === "Cancelled / No-show"
+      : label === "Cancelled" ||
+          label === "No-show"
         ? "border-rose-100 bg-rose-50 text-rose-700"
         : "border-teal-100 bg-teal-50 text-teal-700";
 
@@ -1524,51 +993,8 @@ function ProgressRing({
 }
 
 /* =================================================================
-   TABLE HEADER
-================================================================= */
-
-function Header({
-  children,
-}: {
-  children: ReactNode;
-}) {
-  return (
-    <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-      {children}
-    </th>
-  );
-}
-
-/* =================================================================
    HELPERS
 ================================================================= */
-
-function isConfirmed(
-  status: AppointmentStatus,
-) {
-  return (
-    status === "Scheduled" ||
-    status === "Checked in" ||
-    status === "In treatment"
-  );
-}
-
-function displayStatus(
-  status: AppointmentStatus,
-) {
-  if (status === "Completed") {
-    return "Completed";
-  }
-
-  if (
-    status === "Cancelled" ||
-    status === "No-show"
-  ) {
-    return "Cancelled / No-show";
-  }
-
-  return "Confirmed";
-}
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -1600,32 +1026,6 @@ function getInitials(name: string) {
    ICONS
 ================================================================= */
 
-function SearchIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
-      fill="none"
-      aria-hidden="true"
-    >
-      <circle
-        cx="10.8"
-        cy="10.8"
-        r="6.3"
-        stroke="currentColor"
-        strokeWidth="1.7"
-      />
-
-      <path
-        d="m16 16 4 4"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
 function ArrowIcon() {
   return (
     <svg
@@ -1640,24 +1040,6 @@ function ArrowIcon() {
         strokeWidth="1.8"
         strokeLinecap="round"
         strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-5 w-5"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M5 7h14M10 11v6M14 11v6M9 7V4h6v3M7 7l1 13h8l1-13"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
       />
     </svg>
   );
